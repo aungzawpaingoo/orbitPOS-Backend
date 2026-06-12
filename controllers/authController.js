@@ -233,3 +233,45 @@ exports.getProfile = async (req, res) => {
         res.status(500).json({ status: 'error', message: error.message });
     }
 };
+
+exports.refreshToken = async (req, res) => {
+    const { refreshToken } = req.body;
+
+    if (!refreshToken) {
+        return res.status(401).json({ status: 'error', message: 'Refresh token is required.' });
+    }
+
+    try {
+        const decoded = jwt.verify(refreshToken, process.env.JWT_SECRET);
+
+        const [tokenRows] = await pool.query(
+            'SELECT * FROM refresh_tokens WHERE user_id = ? AND token = ? AND expires_at > NOW()',
+            [decoded.id, refreshToken]
+        );
+
+        if (tokenRows.length === 0) {
+            return res.status(403).json({ status: 'error', message: 'Invalid or expired refresh session.' });
+        }
+
+        const [users] = await pool.query('SELECT * FROM users WHERE id = ? AND status = "active"', [decoded.id]);
+        if (users.length === 0) {
+            return res.status(404).json({ status: 'error', message: 'User profile no longer active.' });
+        }
+
+        const user = users[0];
+
+        const newToken = jwt.sign(
+            { id: user.id, organizationId: user.organization_id, branchId: user.branch_id, role: user.role },
+            process.env.JWT_SECRET,
+            { expiresIn: '1d' }
+        );
+
+        res.status(200).json({
+            status: 'success',
+            token: newToken
+        });
+
+    } catch (error) {
+        res.status(403).json({ status: 'error', message: 'Session expired. Please log in again.' });
+    }
+};

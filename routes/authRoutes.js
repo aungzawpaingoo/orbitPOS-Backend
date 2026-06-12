@@ -6,6 +6,7 @@ const verifyToken = require('../middleware/authMiddleware'); // Import token val
 // Open paths
 router.post('/register', authController.registerOwner);
 router.post('/login', authController.login);
+router.post('/refresh', authController.refreshToken);
 
 // Token-locked paths (Requires Bearer Token in Postman headers)
 // Put this line right below your other protected routes
