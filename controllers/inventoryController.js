@@ -1,6 +1,5 @@
 const pool = require('../config/db');
 
-// READ: Fetch Dashboard Metrics & Product List (Handles Owner vs Employee contexts automatically)
 exports.getInventoryDashboard = async (req, res) => {
     const { organizationId, role, branchId: userBranchId } = req.user;
     const { search, branchFilter } = req.query;
@@ -43,6 +42,8 @@ exports.getInventoryDashboard = async (req, res) => {
                 p.name, 
                 p.sku, 
                 p.price, 
+                p.image_url,
+                p.category,
                 SUM(bi.stock) as stock
             FROM branch_inventory bi
             JOIN products p ON bi.product_id = p.id
@@ -66,25 +67,25 @@ exports.getInventoryDashboard = async (req, res) => {
     }
 };
 
-// CREATE: Add Product with Auto-Generated SKU (Accessible by Owners and Employees)
 exports.addProduct = async (req, res) => {
     const { organizationId, branchId: userBranchId, role } = req.user;
-    const { name, price, stock, targetBranchId } = req.body;
+    const { name, price, stock, targetBranchId, category } = req.body;
     const connection = await pool.getConnection();
 
     try {
         await connection.beginTransaction();
 
-        // If employee, targetBranchId is ignored; they can only write to their own branch partition
         let activeBranchId = (role === 'owner' && targetBranchId) ? targetBranchId : userBranchId;
 
         const cleanName = name.replace(/[^a-zA-Z0-9]/g, '').toUpperCase().substring(0, 4);
         const uniqueString = Math.floor(1000 + Math.random() * 9000);
         const generatedSku = `${cleanName}-${uniqueString}`;
 
+        const imageUrl = req.file ? `/uploads/${organizationId}/${req.file.filename}` : null;
+
         const [productResult] = await connection.query(
-            'INSERT INTO products (organization_id, name, sku, price) VALUES (?, ?, ?, ?)',
-            [organizationId, name, generatedSku, price]
+            'INSERT INTO products (organization_id, name, sku, price, image_url, category) VALUES (?, ?, ?, ?, ?, ?)',
+            [organizationId, name, generatedSku, price, imageUrl, category]
         );
         const productId = productResult.insertId;
 
@@ -98,7 +99,8 @@ exports.addProduct = async (req, res) => {
             status: 'success', 
             message: 'Product mapped to inventory successfully', 
             sku: generatedSku,
-            assignedBranchId: activeBranchId
+            assignedBranchId: activeBranchId,
+            imageUrl: imageUrl
         });
     } catch (error) {
         await connection.rollback();
@@ -108,17 +110,15 @@ exports.addProduct = async (req, res) => {
     }
 };
 
-// UPDATE: Modify Product Information and Specific Stock Tiers
 exports.updateProduct = async (req, res) => {
     const { organizationId, branchId: userBranchId, role } = req.user;
-    const { id } = req.params; // Product ID
-    const { name, price, stock, targetBranchId } = req.body;
+    const { id } = req.params; 
+    const { name, price, stock, targetBranchId, category } = req.body;
     const connection = await pool.getConnection();
 
     try {
         await connection.beginTransaction();
 
-        // Security Check: Verify this product actually belongs to the user's organization
         const [productCheck] = await connection.query(
             'SELECT id FROM products WHERE id = ? AND organization_id = ?',
             [id, organizationId]
@@ -128,19 +128,30 @@ exports.updateProduct = async (req, res) => {
             return res.status(404).json({ status: 'error', message: 'Product not found in your organization.' });
         }
 
-        // 1. Update global product attributes if provided
-        if (name || price) {
+        let updateFields = [];
+        let updateParams = [];
+
+        if (name) { updateFields.push('name = ?'); updateParams.push(name); }
+        if (price) { updateFields.push('price = ?'); updateParams.push(price); }
+        if (category) { updateFields.push('category = ?'); updateParams.push(category); }
+
+        if (req.file) { 
+            const imageUrl = `/uploads/${organizationId}/${req.file.filename}`;
+            updateFields.push('image_url = ?'); 
+            updateParams.push(imageUrl); 
+        }
+
+        if (updateFields.length > 0) {
+            updateParams.push(id);
             await connection.query(
-                'UPDATE products SET name = COALESCE(?, name), price = COALESCE(?, price) WHERE id = ?',
-                [name, price, id]
+                `UPDATE products SET ${updateFields.join(', ')} WHERE id = ?`,
+                updateParams
             );
         }
 
-        // 2. Handle stock balances updates safely
         if (stock !== undefined) {
             let activeBranchId = (role === 'owner' && targetBranchId) ? targetBranchId : userBranchId;
 
-            // Use an UPSERT statement to cleanly update stock, or create a record if it doesn't exist for this branch yet
             await connection.query(`
                 INSERT INTO branch_inventory (organization_id, branch_id, product_id, stock) 
                 VALUES (?, ?, ?, ?)
@@ -158,13 +169,11 @@ exports.updateProduct = async (req, res) => {
     }
 };
 
-// DELETE: Terminate Product Listing and Remove Inventory Mapping completely
 exports.deleteProduct = async (req, res) => {
     const { organizationId } = req.user;
-    const { id } = req.params; // Product ID
+    const { id } = req.params;
 
     try {
-        // Enforce cascading verification rules by checking organization context match
         const [result] = await pool.query(
             'DELETE FROM products WHERE id = ? AND organization_id = ?',
             [id, organizationId]
@@ -174,7 +183,6 @@ exports.deleteProduct = async (req, res) => {
             return res.status(404).json({ status: 'error', message: 'Product not found or unauthorized.' });
         }
 
-        // Due to "ON DELETE CASCADE" rules in our schema setup, the matching branch_inventory rows wipe automatically!
         res.status(200).json({ status: 'success', message: 'Product dropped from inventory catalog.' });
     } catch (error) {
         res.status(500).json({ status: 'error', message: error.message });

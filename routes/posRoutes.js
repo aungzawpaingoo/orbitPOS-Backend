@@ -9,5 +9,6 @@ router.get('/receipts', verifyToken, posController.getReceiptsByDate);
 router.post('/receipts/:id/print', verifyToken, posController.printReceipt);
 router.get('/transaction/:id', verifyToken, posController.getTransactionDetail);
 router.delete('/transaction/:id', verifyToken, posController.deleteTransaction);
+router.put('/orders/:id/add-payment', verifyToken, posController.addPayment);
 
 module.exports = router;
