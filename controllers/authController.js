@@ -58,17 +58,17 @@ exports.login = async (req, res) => {
         const token = jwt.sign(
             { id: user.id, organizationId: user.organization_id, branchId: user.branch_id, role: user.role },
             process.env.JWT_SECRET,
-            { expiresIn: '1d' }
+            { expiresIn: '7d' }
         );
 
         const refreshToken = jwt.sign(
             { id: user.id },
             process.env.JWT_SECRET,
-            { expiresIn: '7d' }
+            { expiresIn: '30d' }
         );
 
         const expiresAt = new Date();
-        expiresAt.setDate(expiresAt.getDate() + 7);
+        expiresAt.setDate(expiresAt.getDate() + 30);
 
         await pool.query(
             'INSERT INTO refresh_tokens (user_id, token, expires_at) VALUES (?, ?, ?)',
